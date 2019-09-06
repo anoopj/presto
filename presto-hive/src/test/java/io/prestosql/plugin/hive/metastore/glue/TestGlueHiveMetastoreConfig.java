@@ -37,7 +37,9 @@ public class TestGlueHiveMetastoreConfig
                 .setAwsSecretKey(null)
                 .setAwsCredentialsProvider(null)
                 .setCatalogId(null)
-                .setUseInstanceCredentials(false));
+                .setUseInstanceCredentials(false)
+                .setPartitionSegments(5)
+                .setGetPartitionThreads(20));
     }
 
     @Test
@@ -54,6 +56,8 @@ public class TestGlueHiveMetastoreConfig
                 .put("hive.metastore.glue.aws-credentials-provider", "custom")
                 .put("hive.metastore.glue.catalogid", "0123456789")
                 .put("hive.metastore.glue.use-instance-credentials", "true")
+                .put("hive.metastore.glue.total-segments", "10")
+                .put("hive.metastore.glue.total-get-partition-threads", "20")
                 .build();
 
         GlueHiveMetastoreConfig expected = new GlueHiveMetastoreConfig()
@@ -66,7 +70,9 @@ public class TestGlueHiveMetastoreConfig
                 .setAwsSecretKey("DEF")
                 .setAwsCredentialsProvider("custom")
                 .setCatalogId("0123456789")
-                .setUseInstanceCredentials(true);
+                .setUseInstanceCredentials(true)
+                .setPartitionSegments(10)
+                .setGetPartitionThreads(20);
 
         assertFullMapping(properties, expected);
     }

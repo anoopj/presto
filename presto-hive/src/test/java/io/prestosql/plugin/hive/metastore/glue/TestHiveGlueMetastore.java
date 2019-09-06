@@ -13,18 +13,32 @@
  */
 package io.prestosql.plugin.hive.metastore.glue;
 
+import io.airlift.concurrent.BoundedExecutor;
 import io.prestosql.plugin.hive.AbstractTestHiveLocal;
+import io.prestosql.plugin.hive.authentication.HiveIdentity;
 import io.prestosql.plugin.hive.metastore.HiveMetastore;
+import org.testng.annotations.Test;
 
 import java.io.File;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Optional;
+import java.util.concurrent.Executor;
 
+import static io.airlift.concurrent.Threads.daemonThreadsNamed;
 import static io.prestosql.plugin.hive.HiveTestUtils.HDFS_ENVIRONMENT;
+import static io.prestosql.testing.TestingConnectorSession.SESSION;
 import static java.util.Locale.ENGLISH;
 import static java.util.UUID.randomUUID;
+import static java.util.concurrent.Executors.newCachedThreadPool;
+import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.assertTrue;
 
 public class TestHiveGlueMetastore
         extends AbstractTestHiveLocal
 {
+    private static final HiveIdentity HIVE_CONTEXT = new HiveIdentity(SESSION);
+
     public TestHiveGlueMetastore()
     {
         super("test_glue" + randomUUID().toString().toLowerCase(ENGLISH).replace("-", ""));
@@ -41,7 +55,8 @@ public class TestHiveGlueMetastore
         GlueHiveMetastoreConfig glueConfig = new GlueHiveMetastoreConfig();
         glueConfig.setDefaultWarehouseDir(tempDir.toURI().toString());
 
-        return new GlueHiveMetastore(HDFS_ENVIRONMENT, glueConfig);
+        Executor executor = new BoundedExecutor(newCachedThreadPool(daemonThreadsNamed("hive-glue-%s")), 10);
+        return new GlueHiveMetastore(HDFS_ENVIRONMENT, glueConfig, executor);
     }
 
     @Override
@@ -86,5 +101,19 @@ public class TestHiveGlueMetastore
             throws Exception
     {
         testStorePartitionWithStatistics(STATISTICS_PARTITIONED_TABLE_COLUMNS, BASIC_STATISTICS_1, BASIC_STATISTICS_2, BASIC_STATISTICS_1, EMPTY_TABLE_STATISTICS);
+    }
+
+    @Test
+    public void testGetPartitions() throws Exception
+    {
+        try {
+            createDummyPartitionedTable(tablePartitionFormat, CREATE_TABLE_COLUMNS_PARTITIONED);
+            Optional<List<String>> partitionNames = getMetastoreClient().getPartitionNames(HIVE_CONTEXT, tablePartitionFormat.getSchemaName(), tablePartitionFormat.getTableName());
+            assertTrue(partitionNames.isPresent());
+            assertEquals(partitionNames.get(), Arrays.asList("ds=2016-01-01", "ds=2016-01-02"));
+        }
+        finally {
+            dropTable(tablePartitionFormat);
+        }
     }
 }

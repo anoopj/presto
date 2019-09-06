@@ -53,10 +53,12 @@ import com.amazonaws.services.glue.model.GetTablesResult;
 import com.amazonaws.services.glue.model.PartitionError;
 import com.amazonaws.services.glue.model.PartitionInput;
 import com.amazonaws.services.glue.model.PartitionValueList;
+import com.amazonaws.services.glue.model.Segment;
 import com.amazonaws.services.glue.model.TableInput;
 import com.amazonaws.services.glue.model.UpdateDatabaseRequest;
 import com.amazonaws.services.glue.model.UpdatePartitionRequest;
 import com.amazonaws.services.glue.model.UpdateTableRequest;
+import com.google.common.collect.Comparators;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
@@ -94,17 +96,23 @@ import io.prestosql.spi.statistics.ColumnStatisticType;
 import io.prestosql.spi.type.Type;
 import org.apache.hadoop.fs.Path;
 
+import javax.annotation.Nullable;
 import javax.inject.Inject;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.CompletionService;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorCompletionService;
 import java.util.concurrent.Future;
 import java.util.function.Function;
+import java.util.stream.IntStream;
 
 import static com.google.common.base.Strings.isNullOrEmpty;
 import static io.prestosql.plugin.hive.HiveErrorCode.HIVE_METASTORE_ERROR;
@@ -136,21 +144,28 @@ public class GlueHiveMetastore
     private static final String WILDCARD_EXPRESSION = "";
     private static final int BATCH_GET_PARTITION_MAX_PAGE_SIZE = 1000;
     private static final int BATCH_CREATE_PARTITION_MAX_PAGE_SIZE = 100;
+    private static final Comparator<Partition> PARTITION_COMPARATOR =
+            Comparator.comparing(p -> p.getValues(), Comparators.lexicographical(String.CASE_INSENSITIVE_ORDER));
 
     private final HdfsEnvironment hdfsEnvironment;
     private final HdfsContext hdfsContext;
     private final AWSGlueAsync glueClient;
     private final Optional<String> defaultDir;
     private final String catalogId;
+    private final int partitionSegments;
+    private final Executor executor;
 
     @Inject
-    public GlueHiveMetastore(HdfsEnvironment hdfsEnvironment, GlueHiveMetastoreConfig glueConfig)
+    public GlueHiveMetastore(HdfsEnvironment hdfsEnvironment, GlueHiveMetastoreConfig glueConfig,
+            @ForGlueHiveMetastore Executor executor)
     {
         this.hdfsEnvironment = requireNonNull(hdfsEnvironment, "hdfsEnvironment is null");
         this.hdfsContext = new HdfsContext(new ConnectorIdentity(DEFAULT_METASTORE_USER, Optional.empty(), Optional.empty()));
         this.glueClient = requireNonNull(createAsyncGlueClient(glueConfig), "glueClient is null");
         this.defaultDir = glueConfig.getDefaultWarehouseDir();
         this.catalogId = glueConfig.getCatalogId().orElse(null);
+        this.partitionSegments = glueConfig.getPartitionSegments();
+        this.executor = requireNonNull(executor, "executor is null");
     }
 
     private static AWSGlueAsync createAsyncGlueClient(GlueHiveMetastoreConfig config)
@@ -669,6 +684,36 @@ public class GlueHiveMetastore
 
     private List<Partition> getPartitions(String databaseName, String tableName, String expression)
     {
+        if (partitionSegments == 1) {
+            return getPartitions(databaseName, tableName, expression, null);
+        }
+
+        // Do parallel partition fetch.
+        CompletionService<List<Partition>> completionService = new ExecutorCompletionService<>(executor);
+        IntStream.range(0, partitionSegments)
+            .mapToObj(s -> new Segment().withSegmentNumber(s).withTotalSegments(partitionSegments))
+            .forEach(segment -> completionService.submit(() -> getPartitions(databaseName, tableName, expression, segment)));
+
+        List<Partition> partitions = new ArrayList<>();
+        try {
+            for (int i = 0; i < partitionSegments; i++) {
+                Future<List<Partition>> futurePartitions = completionService.take();
+                partitions.addAll(futurePartitions.get());
+            }
+        }
+        catch (ExecutionException | InterruptedException e) {
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+            throw new PrestoException(HIVE_METASTORE_ERROR, "Exception when getting partitions", e);
+        }
+
+        partitions.sort(PARTITION_COMPARATOR);
+        return partitions;
+    }
+
+    private List<Partition> getPartitions(String databaseName, String tableName, String expression, @Nullable Segment segment)
+    {
         try {
             List<Partition> partitions = new ArrayList<>();
             String nextToken = null;
@@ -679,6 +724,7 @@ public class GlueHiveMetastore
                         .withDatabaseName(databaseName)
                         .withTableName(tableName)
                         .withExpression(expression)
+                        .withSegment(segment)
                         .withNextToken(nextToken));
                 result.getPartitions()
                         .forEach(partition -> partitions.add(GlueToPrestoConverter.convertPartition(partition)));
