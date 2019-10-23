@@ -680,7 +680,10 @@ public class GlueHiveMetastore
     {
         Table table = getTableOrElseThrow(identity, databaseName, tableName);
         String expression = buildGlueExpression(table.getPartitionColumns(), parts);
+        long start = System.nanoTime();
         List<Partition> partitions = getPartitions(databaseName, tableName, expression);
+        long end = System.nanoTime();
+        log.error("ANOOP: getPartitions took " + (end - start) / 1000_000);
         return Optional.of(buildPartitionNames(table.getPartitionColumns(), partitions));
     }
 
