@@ -112,7 +112,6 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorCompletionService;
 import java.util.concurrent.Future;
 import java.util.function.Function;
-import java.util.stream.IntStream;
 
 import static com.google.common.base.Strings.isNullOrEmpty;
 import static io.prestosql.plugin.hive.HiveErrorCode.HIVE_METASTORE_ERROR;
@@ -658,7 +657,10 @@ public class GlueHiveMetastore
     public Optional<List<String>> getPartitionNames(HiveIdentity identity, String databaseName, String tableName)
     {
         Table table = getTableOrElseThrow(identity, databaseName, tableName);
+        long start = System.nanoTime();
         List<Partition> partitions = getPartitions(databaseName, tableName, WILDCARD_EXPRESSION);
+        long end = System.nanoTime();
+        log.error("ANOOP: getPartitions took " + (end - start) / 1000_000 + "  ms");
         return Optional.of(buildPartitionNames(table.getPartitionColumns(), partitions));
     }
 
@@ -684,15 +686,17 @@ public class GlueHiveMetastore
 
     private List<Partition> getPartitions(String databaseName, String tableName, String expression)
     {
+        log.error("ANOOP: Inside getPartitions: " + partitionSegments);
         if (partitionSegments == 1) {
             return getPartitions(databaseName, tableName, expression, null);
         }
 
         // Do parallel partition fetch.
         CompletionService<List<Partition>> completionService = new ExecutorCompletionService<>(executor);
-        IntStream.range(0, partitionSegments)
-            .mapToObj(s -> new Segment().withSegmentNumber(s).withTotalSegments(partitionSegments))
-            .forEach(segment -> completionService.submit(() -> getPartitions(databaseName, tableName, expression, segment)));
+        for (int i = 0; i < partitionSegments; i++) {
+            Segment segment = new Segment().withSegmentNumber(i).withTotalSegments(partitionSegments);
+            completionService.submit(() -> getPartitions(databaseName, tableName, expression, segment));
+        }
 
         List<Partition> partitions = new ArrayList<>();
         try {
