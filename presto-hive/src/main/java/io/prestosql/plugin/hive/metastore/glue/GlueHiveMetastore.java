@@ -709,7 +709,7 @@ public class GlueHiveMetastore
             if (e instanceof InterruptedException) {
                 Thread.currentThread().interrupt();
             }
-            throw new PrestoException(HIVE_METASTORE_ERROR, "Exception when getting partitions", e);
+            throw new PrestoException(HIVE_METASTORE_ERROR, "Failed to fetch partitions from Glue Data Catalog", e);
         }
 
         partitions.sort(PARTITION_COMPARATOR);
