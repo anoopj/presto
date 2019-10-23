@@ -81,9 +81,10 @@ public class GlueMetastoreModule
     @ForGlueHiveMetastore
     public Executor createCachingHiveMetastoreExecutor(HiveCatalogName catalogName, GlueHiveMetastoreConfig hiveConfig)
     {
-        return hiveConfig.getGetPartitionThreads() == 1 ?
-            directExecutor() :
-            new BoundedExecutor(
+        if (hiveConfig.getGetPartitionThreads() == 1) {
+            return directExecutor();
+        }
+        return new BoundedExecutor(
                 newCachedThreadPool(daemonThreadsNamed("hive-glue-%s")),
                 hiveConfig.getGetPartitionThreads());
     }
